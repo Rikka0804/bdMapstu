@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>百度地图热力图Demo</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map-container {
+            height: 100%;
+            width: 100%;
+        }
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 8px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div id="map-container"></div>
+    <div class="controls">
+        <div style="margin-bottom: 10px;">
+            <input type="text" id="addressInput" placeholder="请输入地址（如：中关村）" style="padding: 8px; width: 200px; margin-right: 5px;">
+            <button onclick="searchAddress()">搜索地址</button>
+        </div>
+        <button onclick="showHeatmap()">显示热力图</button>
+        <button onclick="clearHeatmap()">清除热力图</button>
+        <button onclick="showMarkers()">显示标记点</button>
+        <div id="coordinateResult" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
+    </div>
+
+    <script type="text/javascript" src="https://api.map.baidu.com/api?v=3.0&type=webgl&ak=LUugoH0lcoGxcB25Je0WA9NA0FGEGQaV"></script>
+    <script type="text/javascript" src="https://mapv.baidu.com/build/mapv.min.js"></script>
+    <script type="text/javascript" src="https://code.bdstatic.com/npm/mapvgl@1.0.0-beta.54/dist/mapvgl.min.js"></script>
+    
+    <script>
+        // 全局变量
+        var map;
+        var mapvglView;
+        var mapvglInitPending = false;
+        var heatmapLayer;
+        var markers = [];
+        var districtOverlays = []; // 存储所有区的覆盖物
+        var beijingBoundary = [];
+        var beijingBorderOverlays = [];
+        var beijingMaskOverlays = [];
+        var districtColors = {      // 北京市各区颜色映射（类似图二）
+            "东城区": "#FF6B6B",
+            "西城区": "#4ECDC4",
+            "朝阳区": "#45B7D1",
+            "丰台区": "#96CEB4",
+            "石景山区": "#FFEAA7",
+            "海淀区": "#DDA0DD",
+            "门头沟区": "#98D8C8",
+            "房山区": "#F7DC6F",
+            "通州区": "#BB8FCE",
+            "顺义区": "#85C1E9",
+            "昌平区": "#F8C471",
+            "大兴区": "#82E0AA",
+            "怀柔区": "#F5B7B1",
+            "平谷区": "#D7BDE2",
+            "密云区": "#A3E4D7",
+            "延庆区": "#FADBD8"
+        };
+        
+        // 初始化地图 - 聚焦北京市
+        function initMap() {
+            // 创建地图实例
+            map = new BMapGL.Map("map-container");
+            
+            // 设置中心点坐标（北京市中心）
+            var point = new BMapGL.Point(116.404, 39.915);
+            
+            // 初始化地图，设置中心点坐标和地图级别（显示整个北京市）
+            map.centerAndZoom(point, 10);
+            
+            // 添加地图控件
+            try { map.addControl(new BMapGL.NavigationControl3D()); } catch (e) {}
+            try { map.addControl(new BMapGL.ScaleControl()); } catch (e) {}
+            try { map.addControl(new BMapGL.MapTypeControl()); } catch (e) {}
+            
+            // 开启鼠标滚轮缩放
+            map.enableScrollWheelZoom(true);
+            
+            console.log("百度地图初始化成功，聚焦北京市");
+            
+            initMapVgl();
+            drawBeijingBoundaryOutlineAndMask();
+
+            // 显示北京市各区彩色区域
+            showBeijingDistricts();
+            
+            // 自动显示热力图
+            showHeatmap();
+        }
+
+        function initMapVgl() {
+            if (!mapvgl || !mapv) {
+                console.warn("mapvgl 或 mapv 未加载，热力图将不可用");
+                return;
+            }
+            if (mapvglView) return;
+            if (mapvglInitPending) return;
+            mapvglInitPending = true;
+            try {
+                mapvglView = new mapvgl.View({ map: map });
+                mapvglInitPending = false;
+            } catch (e) {
+                try {
+                    var handler = function () {
+                        try { map.removeEventListener('tilesloaded', handler); } catch (e0) {}
+                        if (mapvglView) {
+                            mapvglInitPending = false;
+                            return;
+                        }
+                        try { mapvglView = new mapvgl.View({ map: map }); } catch (e2) {}
+                        mapvglInitPending = false;
+                    };
+                    map.addEventListener('tilesloaded', handler);
+                } catch (e3) {}
+            }
+        }
+
+        function clearOverlays(list) {
+            if (!map || !list || !list.length) return;
+            for (var i = 0; i < list.length; i++) {
+                map.removeOverlay(list[i]);
+            }
+            list.length = 0;
+        }
+
+        function boundaryStringToPoints(boundaryStr) {
+            var points = [];
+            if (!boundaryStr) return points;
+            var pointStrs = boundaryStr.split(";");
+            for (var i = 0; i < pointStrs.length; i++) {
+                var xy = pointStrs[i].split(",");
+                if (xy.length < 2) continue;
+                var lng = parseFloat(xy[0]);
+                var lat = parseFloat(xy[1]);
+                if (isNaN(lng) || isNaN(lat)) continue;
+                points.push(new BMapGL.Point(lng, lat));
+            }
+            return points;
+        }
+
+        function ringSignedArea(points) {
+            if (!points || points.length < 3) return 0;
+            var sum = 0;
+            for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+                sum += (points[j].lng * points[i].lat) - (points[i].lng * points[j].lat);
+            }
+            return sum / 2;
+        }
+
+        function ensureRingWinding(points, clockwise) {
+            if (!points || points.length < 3) return points;
+            var area = ringSignedArea(points);
+            var isClockwise = area < 0;
+            if (isClockwise !== clockwise) return points.slice().reverse();
+            return points;
+        }
+
+        function closeRing(points) {
+            if (!points || points.length < 2) return points;
+            var first = points[0];
+            var last = points[points.length - 1];
+            if (first.lng === last.lng && first.lat === last.lat) return points;
+            return points.concat([first]);
+        }
+
+        function drawBeijingBoundaryOutlineAndMask() {
+            clearOverlays(beijingBorderOverlays);
+            clearOverlays(beijingMaskOverlays);
+
+            var bdary = new BMapGL.Boundary();
+            bdary.get("北京市", function (rs) {
+                if (!rs || !rs.boundaries || !rs.boundaries.length) {
+                    console.warn("未能获取北京市边界");
+                    return;
+                }
+
+                beijingBoundary = rs.boundaries.slice();
+
+                var outerRing = closeRing(ensureRingWinding([
+                    new BMapGL.Point(70.0, 3.0),
+                    new BMapGL.Point(70.0, 60.0),
+                    new BMapGL.Point(140.0, 60.0),
+                    new BMapGL.Point(140.0, 3.0)
+                ], true));
+
+                for (var i = 0; i < rs.boundaries.length; i++) {
+                    var boundaryStr = rs.boundaries[i];
+
+                    var border = new BMapGL.Polygon(boundaryStr, {
+                        fillOpacity: 0,
+                        strokeColor: "#111111",
+                        strokeWeight: 4,
+                        strokeOpacity: 1,
+                        enableClicking: false
+                    });
+                    map.addOverlay(border);
+                    beijingBorderOverlays.push(border);
+
+                    var innerRing = closeRing(ensureRingWinding(boundaryStringToPoints(boundaryStr), false));
+                    try {
+                        var mask = new BMapGL.Polygon([outerRing, innerRing], {
+                            fillColor: "#000000",
+                            fillOpacity: 0.25,
+                            strokeOpacity: 0,
+                            strokeWeight: 0,
+                            enableClicking: false
+                        });
+                        map.addOverlay(mask);
+                        beijingMaskOverlays.push(mask);
+                    } catch (e) {
+                        console.warn("镂空面绘制失败（BMapGL.Polygon 多环路径不兼容），已仅保留描边效果");
+                    }
+                }
+
+                console.log("北京市边界描边与镂空面绘制完成");
+            });
+        }
+        
+        // 显示北京市各区彩色区域
+        function showBeijingDistricts() {
+            // 清除之前的所有区覆盖物
+            clearDistrictOverlays();
+            
+            var districtNames = Object.keys(districtColors);
+
+            console.log("开始绘制北京市各区彩色区域，共" + districtNames.length + "个区");
+
+            districtNames.forEach(function (districtName) {
+                var districtColor = districtColors[districtName] || "#CCCCCC";
+                var bdary = new BMapGL.Boundary();
+                bdary.get("北京市" + districtName, function (rs) {
+                    if (!rs || !rs.boundaries || !rs.boundaries.length) return;
+                    for (var i = 0; i < rs.boundaries.length; i++) {
+                        var boundaryStr = rs.boundaries[i];
+
+                        var polygon = new BMapGL.Polygon(boundaryStr, {
+                            fillColor: districtColor,
+                            fillOpacity: 0.7,
+                            strokeColor: "#000000",
+                            strokeWeight: 1,
+                            strokeOpacity: 0.8,
+                            enableClicking: false
+                        });
+                        map.addOverlay(polygon);
+                        districtOverlays.push(polygon);
+
+                        if (i === 0) {
+                            try {
+                                var bounds = polygon.getBounds();
+                                var center = bounds.getCenter();
+                                var label = new BMapGL.Label(districtName, {
+                                    position: new BMapGL.Point(center.lng, center.lat),
+                                    offset: new BMapGL.Size(0, 0)
+                                });
+                                label.setStyle({
+                                    color: "#333",
+                                    fontSize: "14px",
+                                    fontWeight: "bold",
+                                    backgroundColor: "transparent",
+                                    border: "none",
+                                    textAlign: "center"
+                                });
+                                map.addOverlay(label);
+                                districtOverlays.push(label);
+                            } catch (e) {}
+                        }
+                    }
+                });
+            });
+        }
+        
+        // 清除所有区覆盖物
+        function clearDistrictOverlays() {
+            clearOverlays(districtOverlays);
+            console.log("所有区覆盖物已清除");
+        }
+        
+        // 生成热力图数据 - 海淀区2万人分布（百度API格式）
+        function generateBaiduHeatmapData() {
+            var data = [];
+            
+            // 海淀区主要区域（中关村、五道口、西二旗、颐和园、上地等）
+            var areas = [
+                { lng: 116.318, lat: 39.983, count: 5000 },  // 中关村（核心商业区）
+                { lng: 116.337, lat: 39.991, count: 3500 },  // 五道口（高校密集区）
+                { lng: 116.303, lat: 40.047, count: 3000 },  // 西二旗（互联网公司）
+                { lng: 116.306, lat: 40.035, count: 2500 },  // 上地（科技园）
+                { lng: 116.275, lat: 39.996, count: 2000 },  // 颐和园（旅游区）
+                { lng: 116.293, lat: 39.960, count: 1500 },  // 苏州街（商业区）
+                { lng: 116.328, lat: 39.952, count: 1000 },  // 北京大学
+                { lng: 116.330, lat: 39.986, count: 1000 },  // 清华大学
+                { lng: 116.280, lat: 40.020, count: 500 }    // 海淀北部新区
+            ];
+            
+            // 为每个区域生成数据点
+            areas.forEach(function(area) {
+                for (var i = 0; i < area.count; i++) {
+                    // 生成随机偏移，根据区域重要性调整分布范围
+                    var angle = Math.random() * Math.PI * 3;
+                    var maxDistance = area.count > 20000 ? 0.025 : 0.035; // 核心区域分布更集中
+                    var distance = Math.random() * maxDistance;
+                    
+                    var lng = area.lng + Math.cos(angle) * distance;
+                    var lat = area.lat + Math.sin(angle) * distance;
+                    
+                    // 距离越近，权重越高（人越多的地方权重越高）
+                    var weight = Math.round(100 * Math.exp(-distance * 40));
+                    
+                    // 百度热力图API数据格式：{lng, lat, count}
+                    data.push({
+                        lng: lng,
+                        lat: lat,
+                        count: weight
+                    });
+                }
+            });
+            
+            console.log("海淀区热力图生成了", data.length, "个数据点");
+            return data;
+        }
+        
+        // 显示热力图 - 使用百度官方Heatmap API
+        function showHeatmap() {
+            if (!map) {
+                alert('地图正在加载中，请稍候...');
+                return;
+            }
+            
+            // 清除之前的热力图
+            clearHeatmap();
+
+            if (!mapvglView) {
+                initMapVgl();
+                if (!mapvglView) {
+                    setTimeout(showHeatmap, 200);
+                    return;
+                }
+            }
+
+            // 生成热力图数据（百度API格式）
+            var heatmapData = generateBaiduHeatmapData();
+
+            heatmapLayer = new mapvgl.HeatPointLayer({
+                size: 25,
+                max: 100,
+                min: 0,
+                unit: 'px',
+                height: 0,
+                gradient: {
+                    0.4: 'rgba(0, 255, 0, 0.6)',
+                    0.7: 'rgba(255, 255, 0, 0.7)',
+                    1.0: 'rgba(255, 0, 0, 0.8)'
+                }
+            });
+            mapvglView.addLayer(heatmapLayer);
+
+            var vglData = heatmapData.map(function (p) {
+                return {
+                    geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+                    properties: { count: p.count }
+                };
+            });
+            heatmapLayer.setData(vglData);
+
+            console.log('热力图加载成功，共', heatmapData.length, '个数据点');
+        }
+        
+        // 清除热力图
+        function clearHeatmap() {
+            if (mapvglView && heatmapLayer) {
+                try { heatmapLayer.setData([]); } catch (e) {}
+                try { mapvglView.removeLayer(heatmapLayer); } catch (e) {}
+                heatmapLayer = null;
+            }
+            
+            // 清除标记点
+            markers.forEach(function(marker) {
+                map.removeOverlay(marker);
+            });
+            markers = [];
+            
+            console.log('热力图已清除');
+        }
+        
+        // 显示标记点
+        function showMarkers() {
+            if (!map) {
+                alert('地图正在加载中，请稍候...');
+                return;
+            }
+            
+            // 清除之前的标记点
+            markers.forEach(function(marker) {
+                map.removeOverlay(marker);
+            });
+            markers = [];
+            
+            // 北京主要区域
+            var areas = [
+                { name: '天安门', lng: 116.404, lat: 39.915 },
+                { name: 'CBD', lng: 116.466, lat: 39.904 },
+                { name: '中关村', lng: 116.318, lat: 39.983 },
+                { name: '王府井', lng: 116.417, lat: 39.914 },
+                { name: '西单', lng: 116.367, lat: 39.913 }
+            ];
+            
+            // 添加标记点
+            areas.forEach(function(area) {
+                var point = new BMapGL.Point(area.lng, area.lat);
+                var marker = new BMapGL.Marker(point);
+                map.addOverlay(marker);
+                markers.push(marker);
+                
+                // 添加信息窗口
+                var infoWindow = new BMapGL.InfoWindow(area.name);
+                marker.addEventListener('click', function() {
+                    this.openInfoWindow(infoWindow);
+                });
+            });
+            
+            console.log('标记点已显示');
+        }
+        
+        // 判断点是否在多边形内（射线法）
+        function isPointInPolygon(point, polygon) {
+            var inside = false;
+            for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                var xi = polygon[i].lng, yi = polygon[i].lat;
+                var xj = polygon[j].lng, yj = polygon[j].lat;
+                
+                var intersect = ((yi > point.lat) != (yj > point.lat)) && 
+                    (point.lng < (xj - xi) * (point.lat - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+        
+        // 判断点是否在北京市范围内（适配新的边界数据格式）
+        function isPointInBeijing(point) {
+            if (!beijingBoundary || beijingBoundary.length === 0) {
+                return true; // 如果边界数据还没加载完成，暂时允许所有搜索
+            }
+            
+            // 检查点是否在任何一个北京市边界环内
+            for (var i = 0; i < beijingBoundary.length; i++) {
+                // 将字符串格式的边界转换为Point数组
+                var polygonPath = [];
+                var pointStrs = beijingBoundary[i].split(";");
+                for (var j = 0; j < pointStrs.length; j++) {
+                    var xy = pointStrs[j].split(",");
+                    polygonPath.push(new BMapGL.Point(parseFloat(xy[0]), parseFloat(xy[1])));
+                }
+                
+                if (isPointInPolygon(point, polygonPath)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // 地址搜索功能 - 限制在北京市内
+        function searchAddress() {
+            var addressInput = document.getElementById('addressInput');
+            var coordinateResult = document.getElementById('coordinateResult');
+            var address = addressInput.value.trim();
+            
+            if (!map) {
+                alert('地图正在加载中，请稍候...');
+                return;
+            }
+            
+            if (!address) {
+                alert('请输入地址');
+                return;
+            }
+            
+            // 使用百度地图的Geocoder进行地址解析
+            var geocoder = new BMapGL.Geocoder();
+            
+            geocoder.getPoint(address, function(point) {
+                if (point) {
+                    // 检查坐标是否在北京市范围内
+                    if (isPointInBeijing(point)) {
+                        // 显示坐标信息
+                        coordinateResult.innerHTML = '地址：' + address + '<br>坐标：经度 ' + point.lng + '，纬度 ' + point.lat;
+                        
+                        // 清除之前的搜索标记
+                        if (window.searchMarker) {
+                            map.removeOverlay(window.searchMarker);
+                        }
+                        
+                        // 在地图上标记该地址
+                        var marker = new BMapGL.Marker(point);
+                        map.addOverlay(marker);
+                        window.searchMarker = marker;
+                        
+                        // 平滑移动地图中心到该地址
+                        map.panTo(point);
+                        
+                        // 平滑放大地图到合适级别（带动画效果）
+                        setTimeout(function() {
+                            map.setZoom(15);
+                        }, 500);
+                        
+                        // 创建信息窗口（气泡）
+                        var infoWindow = new BMapGL.InfoWindow(
+                            '<div style="padding: 10px;">' +
+                            '<h4>' + address + '</h4>' +
+                            '<p>经度：' + point.lng + '</p>' +
+                            '<p>纬度：' + point.lat + '</p>' +
+                            '</div>',
+                            { 
+                                width: 200, 
+                                height: 120,
+                                enableAutoPan: true // 确保信息窗口显示在可视区域内
+                            }
+                        );
+                        
+                        // 延迟打开信息窗口，等待地图移动和缩放完成
+                        setTimeout(function() {
+                            marker.openInfoWindow(infoWindow);
+                        }, 1000);
+                        
+                        console.log('地址搜索成功：', address, point);
+                    } else {
+                        coordinateResult.innerHTML = '搜索的地址不在北京市范围内';
+                        alert('搜索的地址不在北京市范围内');
+                        console.log('地址不在北京市范围内：', address, point);
+                    }
+                } else {
+                    coordinateResult.innerHTML = '地址解析失败，请检查地址是否正确';
+                    alert('地址解析失败，请检查地址是否正确');
+                    console.log('地址解析失败：', address);
+                }
+            }, '北京市'); // 限制搜索范围为北京市
+        }
+        
+        // 页面加载完成后初始化地图
+        window.onload = initMap;
+    </script>
+</body>
+</html>
