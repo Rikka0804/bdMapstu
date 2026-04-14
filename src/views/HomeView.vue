@@ -5,6 +5,13 @@ import heat from '@/assets/heat.png'
 import heatActive from '@/assets/heatActive.png'
 import point from '@/assets/point.png'
 import pointActive from '@/assets/pointActive.png'
+import quData from './qu.json'
+import jiedaoData from './jiedao.json'
+import allData from './beijing.json'
+
+const quDataList = quData
+const jiedaoDataList = jiedaoData
+const allDataList = allData
 // 1. heat 热力 ponint点位
 type Mode = 'heat' | 'point'
 
@@ -181,7 +188,20 @@ const HEAT_BASE_POINTS: HeatmapPoint[] = [
   { geometry: { type: 'Point', coordinates: [115.985, 40.462] }, properties: { count: 18 } }
 ]
 
+ const fetchLocation = async (keyword: string) => {
+  const url =
+    `/baidu-map-api/geocoding/v3/?address=${encodeURIComponent(keyword)}` +
+    `&output=json&ak=pcoZXzIJJYioSUIMKWX2wevsVE5m9fRw`
 
+  const response = await fetch(url)
+  const data = await response.json()
+
+  if (data.status !== 0 || !data.result?.location) {
+    throw new Error(`百度地理编码失败: ${keyword}`)
+  }
+
+  return [data.result.location.lng, data.result.location.lat] as [number, number]
+}
 
 // 地图挂载 DOM 容器。
 const mapContainer = ref<HTMLDivElement | null>(null)

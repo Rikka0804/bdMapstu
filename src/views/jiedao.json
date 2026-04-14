@@ -1,0 +1,14 @@
+        {
+          "id": 11271,
+          "name": "交道口街道",
+          "parentId": 7,
+          "level": "TOWN",
+          "idCode": 110101003000,
+          "areaType": null,
+          "sortNo": 1,
+          "children": [],
+          "cityNum": 0,
+          "distinguishNum": 0,
+          "streetNum": 0,
+          "privateEnterpriseNum": 0
+        }
