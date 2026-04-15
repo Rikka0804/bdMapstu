@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 import VueBaiduMapView from '../views/VueBaiduMapView.vue'
 import VueBaiduMapView2 from '../views/view_copy.vue'
+import VueBaiduMapViewQuOnly from '../views/view_qu_only.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -19,6 +20,11 @@ const router = createRouter({
       path: '/vue-baidu-map2',
       name: 'vue-baidu-map2',
       component: VueBaiduMapView2
+    },
+    {
+      path: '/vue-baidu-map-qu-only',
+      name: 'vue-baidu-map-qu-only',
+      component: VueBaiduMapViewQuOnly
     }
   ]
 })

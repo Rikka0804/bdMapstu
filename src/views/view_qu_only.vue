@@ -1,50 +1,63 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import search from '@/assets/mapSearch.png'
 import heat from '@/assets/heat.png'
 import heatActive from '@/assets/heatActive.png'
 import point from '@/assets/point.png'
 import pointActive from '@/assets/pointActive.png'
-import allData from './beijing.json'
+// 全市各区边界
+// mock 的街道边界数据。
+import eastDistrictStreetBoundarySource from './qubj1.json'
+// mock 的单街道边界数据。
+import selectedStreetBoundarySource from './jiedaobj.json'
 
-type AreaLevel = 'CITY' | 'COUNTY' | 'TOWN'
-
-type AreaNode = {
-  id: number
+type BoundaryFeature = {
+  // 边界名称。
   name: string
-  level: AreaLevel
-  value?: number
-  children?: AreaNode[]
+  // 行政区 id。
+  relatedId: number
+  // 坐标。
+  coordinates: number[][][][]
+  level: string
+  // 企业数量。
+  privateEnterpriseCount?: number
 }
 
-const allDataList = allData as AreaNode
-// 页面当前使用的数据根节点。后续如果切数据源，只需要切这个引用。
-const currentDataList = ref<AreaNode>(allDataList)
+type BoundaryCollection = {
+  // 区边界字段。
+  mapData?: BoundaryFeature[]
+  // 单街道边界字段。
+  data?: BoundaryFeature[]
+}
+
+type PolygonInput = any[]
+
+// 北京首页使用的区边界数据。
+const rootBoundaryList = (eastDistrictStreetBoundarySource as BoundaryCollection).mapData ?? []
+// 街道 mock 边界数据。
+// 单街道 mock 边界数据。
+const selectedStreetBoundaryList = (selectedStreetBoundarySource as BoundaryCollection).data ?? []
+// 地理编码时统一使用的城市前缀。
+const CITY_NAME = '北京市'
 
 // 1. heat 热力 ponint点位
 type Mode = 'heat' | 'point'
+const ROOT_DISTRICT_NAME = '东城区'
 
-// 每个行政区的基础信息。
-type DistrictItem = {
+// 地图上所有可点击标签统一用这一种数据结构：
+// 首页表示区，点区后表示街道。
+type MapLabelItem = {
   id: number
-  // 行政区名字
   name: string
-  // 区中心点。[经度, 纬度]
+  // 中心点[经度, 纬度]
   center: [number, number]
-  // 标签显示
+  // 标签显示值。
   value: number
+  // 地理编码关键字。
   keyword: string
-  // 预留字段。按区聚焦
+  // 点击标签后聚焦的缩放级别。
   focusZoom: number
-}
-
-type StreetItem = {
-  id: number
-  districtName: string
-  name: string
-  center: [number, number]
-  value: number
-  keyword: string
+  // 区级标签时为空；街道标签时记录所属区，当前主要用于按区缓存街道列表。
 }
 
 
@@ -59,12 +72,11 @@ type HeatmapPoint = {
   }
 }
 
-// 页面里会动态增删四类覆盖物：
-// 1. 北京整市边界
-// 2. 各区边界
-// 3. 点位图的文本标签
-// 4. 搜索标记
-type OverlayGroup = 'cityBoundary' | 'districtBoundary' | 'districtLabel' | 'searchMarker'
+// 页面里会动态增删三类覆盖物：
+// 1. 地图边界
+// 2. 点位图的文本标签
+// 3. 搜索标记
+type OverlayGroup = 'mapBoundary' | 'districtLabel' | 'searchMarker'
 
 
 type BMapWindow = Window &
@@ -74,35 +86,48 @@ type BMapWindow = Window &
     mapv?: any
   }
 
-// 中心点和缩放级别。
-
+// 地图默认中心点和缩放级别。
 const CITY_VIEW = {
   center: [116.404, 39.915] as [number, number],
   zoom: 10
 }
-const DEFAULT_DISTRICT_FOCUS_ZOOM = 12
+// 点击区后的默认缩放级别。
+const DEFAULT_DISTRICT_FOCUS_ZOOM = 13
+// 点击街道后的默认缩放级别。
+const DEFAULT_STREET_FOCUS_ZOOM = 15
+// 当前页面统一使用的边界样式。
+const DEFAULT_BOUNDARY_STYLE = {
+  strokeColor: '#a88d8a',
+  strokeWeight: 3,
+  strokeOpacity: 0.96,
+  fillColor: '#ccffe8',
+  fillOpacity: 0.48,
+  enableClicking: false
+}
 
-// 模拟搜索的点位
+// 搜索按钮演示使用的固定点位。
 const SEARCH_MARKER_POINT = [116.1485, 39.7598] as [number, number]
 
 // 热力图刻度值。
 const HEAT_SCALE = [0, 10000, 20000, 30000, 40000, 50000]
 
-// 点位图使用的派生数据，和原始权限树分开存，避免回写原数组。
+// 当前地图视角。
 const cityView = ref({
   center: [...CITY_VIEW.center] as [number, number],
   zoom: CITY_VIEW.zoom
 })
-const districtPointItems = ref<DistrictItem[]>([])
-const streetPointItemsByDistrict = ref<Record<string, StreetItem[]>>({})
+// 北京首页的区级标签数据，重置视图时会回到这里。
+const rootLabelItems = ref<MapLabelItem[]>([])
+// 当前标签数据。
+const currentLabelItems = ref<MapLabelItem[]>([])
+// 当前边界数据。
+const currentBoundaryFeatures = ref<BoundaryFeature[]>(rootBoundaryList)
+// 加载时 loading 
 const isLocationLoading = ref(false)
-// 地理编码缓存。相同关键字只请求一次，区和街道二次进入直接复用。
-const locationCache = new Map<string, [number, number]>()
 
-// 热力图模拟数据
-
+// 热力图演示数据。
 const HEAT_BASE_POINTS: HeatmapPoint[] = [
-  { geometry: { type: 'Point', coordinates: [116.221, 39.873] }, properties: { count: 78 } },
+  { geometry: { type: 'Point', coordinates: [116.221, 39.873] }, properties: { count: 10 } },
   { geometry: { type: 'Point', coordinates: [116.242, 39.842] }, properties: { count: 98 } },
   { geometry: { type: 'Point', coordinates: [116.258, 39.791] }, properties: { count: 92 } },
   { geometry: { type: 'Point', coordinates: [116.285, 39.768] }, properties: { count: 86 } },
@@ -110,17 +135,17 @@ const HEAT_BASE_POINTS: HeatmapPoint[] = [
   { geometry: { type: 'Point', coordinates: [116.323, 39.874] }, properties: { count: 90 } },
   { geometry: { type: 'Point', coordinates: [116.341, 39.845] }, properties: { count: 94 } },
   { geometry: { type: 'Point', coordinates: [116.352, 39.905] }, properties: { count: 96 } },
-  { geometry: { type: 'Point', coordinates: [116.367, 39.872] }, properties: { count: 100 } },
+  { geometry: { type: 'Point', coordinates: [116.367, 39.872] }, properties: { count: 10 } },
   { geometry: { type: 'Point', coordinates: [116.374, 39.931] }, properties: { count: 93 } },
   { geometry: { type: 'Point', coordinates: [116.395, 39.896] }, properties: { count: 98 } },
   { geometry: { type: 'Point', coordinates: [116.412, 39.857] }, properties: { count: 96 } },
   { geometry: { type: 'Point', coordinates: [116.428, 39.822] }, properties: { count: 92 } },
-  { geometry: { type: 'Point', coordinates: [116.446, 39.783] }, properties: { count: 100 } },
+  { geometry: { type: 'Point', coordinates: [116.446, 39.783] }, properties: { count: 10 } },
   { geometry: { type: 'Point', coordinates: [116.452, 39.733] }, properties: { count: 88 } },
   { geometry: { type: 'Point', coordinates: [116.395, 39.742] }, properties: { count: 72 } },
   { geometry: { type: 'Point', coordinates: [116.344, 39.716] }, properties: { count: 75 } },
   { geometry: { type: 'Point', coordinates: [116.292, 39.721] }, properties: { count: 68 } },
-  { geometry: { type: 'Point', coordinates: [116.266, 39.879] }, properties: { count: 70 } },
+  { geometry: { type: 'Point', coordinates: [116.266, 39.879] }, properties: { count: 10 } },
   { geometry: { type: 'Point', coordinates: [116.294, 39.918] }, properties: { count: 76 } },
   { geometry: { type: 'Point', coordinates: [116.319, 39.952] }, properties: { count: 80 } },
   { geometry: { type: 'Point', coordinates: [116.359, 39.968] }, properties: { count: 84 } },
@@ -164,6 +189,7 @@ const HEAT_BASE_POINTS: HeatmapPoint[] = [
   { geometry: { type: 'Point', coordinates: [115.985, 40.462] }, properties: { count: 18 } }
 ]
 
+// 通过百度接口获取名称对应的中心点。
 const fetchLocation = async (keyword: string) => {
   const url =
     `/baidu-map-api/geocoding/v3/?address=${encodeURIComponent(keyword)}` +
@@ -179,7 +205,7 @@ const fetchLocation = async (keyword: string) => {
   return [data.result.location.lng, data.result.location.lat] as [number, number]
 }
 
-// 统一管理中心点获取时的 loading，兼容初始化和区级钻取两种场景。
+// loading 的异步函数。
 const withLocationLoading = async <T>(loader: () => Promise<T>) => {
   isLocationLoading.value = true
 
@@ -190,120 +216,54 @@ const withLocationLoading = async <T>(loader: () => Promise<T>) => {
   }
 }
 
-const getAreaValue = (node: AreaNode) => Number(node.value ?? 0)
-
-// 对 `fetchLocation` 再包一层缓存，避免相同区域名重复调用地理编码接口。
-const resolveLocation = async (keyword: string) => {
-  const cachedLocation = locationCache.get(keyword)
-
-  if (cachedLocation) {
-    return cachedLocation
+// 把本地边界坐标转成百度地图 `Polygon` 可直接使用的数据。
+const getPolygonInputsFromFeature = (feature?: BoundaryFeature | null) => {
+  if (!feature?.coordinates?.length || !BMapGLRef) {
+    return []
   }
 
-  const location = await fetchLocation(keyword)
-  locationCache.set(keyword, location)
-  return location
+  return feature.coordinates.map((polygon) => {
+    const rings = polygon.map((ring) => ring.map(([lng, lat]) => new BMapGLRef.Point(lng, lat)))
+    return rings.length === 1 ? rings[0] : rings
+  })
 }
 
-// 顶层点位图只展示区一级节点。
-const getCountyNodes = (rootNode: AreaNode) => {
-  return (rootNode.children ?? []).filter((item) => item.level === 'COUNTY')
-}
 
-// 钻取后只展示当前区下的街道/乡镇节点。
-const getTownNodes = (districtNode: AreaNode) => {
-  return (districtNode.children ?? []).filter((item) => item.level === 'TOWN')
-}
+// 区级标签使用的地理编码关键字。
+const buildDistrictKeyword = (districtName: string) => `${CITY_NAME}${districtName}`
+// 街道级标签使用的地理编码关键字。
+const buildTownKeyword = (districtName: string, townName: string) => `${CITY_NAME}${districtName}${townName}`
 
-// 百度地理编码用完整行政区名字命中率更高，这里统一拼接查询关键字。
-const buildDistrictKeyword = (rootNode: AreaNode, districtName: string) => {
-  return `${rootNode.name}${districtName}`
-}
-
-// 街道中心点也使用完整路径关键字，减少重名乡镇带来的定位偏差。
-const buildTownKeyword = (rootNode: AreaNode, districtName: string, townName: string) => {
-  return `${rootNode.name}${districtName}${townName}`
-}
-
-const loadInitialPointItems = async () => {
-  const rootNode = currentDataList.value
-  const countyNodes = getCountyNodes(rootNode)
-
-  const rootCenter = await resolveLocation(rootNode.name).catch(() => CITY_VIEW.center)
-  const districtItems = await Promise.all(
-    countyNodes.map(async (node) => {
+// 用一份边界数据批量生成当前层级的标签数据。
+const loadPointItems = async ({
+  boundaries,
+  focusZoom,
+  buildKeyword
+}: {
+  boundaries: BoundaryFeature[]
+  focusZoom: number
+  buildKeyword: (name: string) => string
+}) => {
+  const items = await Promise.all(
+    boundaries.map(async (boundary) => {
       try {
-        const districtItem: DistrictItem = {
-          id: node.id,
-          name: node.name,
-          center: await resolveLocation(buildDistrictKeyword(rootNode, node.name)),
-          value: getAreaValue(node),
-          keyword: buildDistrictKeyword(rootNode, node.name),
-          focusZoom: DEFAULT_DISTRICT_FOCUS_ZOOM
+        const item: MapLabelItem = {
+          id: boundary.relatedId,
+          name: boundary.name,
+          center: await fetchLocation(buildKeyword(boundary.name)),
+          value: boundary.privateEnterpriseCount ?? 0,
+          keyword: buildKeyword(boundary.name),
+          focusZoom
         }
 
-        return districtItem
+        return item
       } catch {
         return null
       }
     })
   )
 
-  cityView.value = {
-    center: rootCenter,
-    zoom: CITY_VIEW.zoom
-  }
-  districtPointItems.value = districtItems.filter((item): item is DistrictItem => item !== null)
-}
-
-// 点进区时再懒加载街道中心点；如果第一条已有 center，说明之前取过，直接复用。
-const ensureTownPointItems = async (districtName: string) => {
-  const cachedItems = streetPointItemsByDistrict.value[districtName]
-
-  if (cachedItems?.length === 0 || cachedItems?.[0]?.center) {
-    return cachedItems ?? []
-  }
-
-  const rootNode = currentDataList.value
-  const districtNode = getCountyNodes(rootNode).find((item) => item.name === districtName)
-
-  if (!districtNode) {
-    streetPointItemsByDistrict.value = {
-      ...streetPointItemsByDistrict.value,
-      [districtName]: []
-    }
-    return []
-  }
-
-  const townNodes = getTownNodes(districtNode)
-  const townItems = await withLocationLoading(async () => {
-    return Promise.all(
-      townNodes.map(async (node) => {
-        try {
-          const streetItem: StreetItem = {
-            id: node.id,
-            districtName,
-            name: node.name,
-            center: await resolveLocation(buildTownKeyword(rootNode, districtName, node.name)),
-            value: getAreaValue(node),
-            keyword: buildTownKeyword(rootNode, districtName, node.name)
-          }
-
-          return streetItem
-        } catch {
-          return null
-        }
-      })
-    )
-  })
-
-  const nextItems = townItems.filter((item): item is StreetItem => item !== null)
-  streetPointItemsByDistrict.value = {
-    ...streetPointItemsByDistrict.value,
-    [districtName]: nextItems
-  }
-
-  return nextItems
+  return items.filter((item): item is MapLabelItem => item !== null)
 }
 
 // 地图挂载 DOM 容器。
@@ -319,28 +279,27 @@ const mode = ref<Mode>('point')
 const isMapReady = ref(false)
 
 
-// 地图覆盖物，方便后面统一删除。
-// 切换模式手动清理。
+// 当前页面维护的覆盖物分组，方便统一删除和重绘。
 const overlayGroups: Record<OverlayGroup, any[]> = {
-  cityBoundary: [],
-  districtBoundary: [],
+  mapBoundary: [],
   districtLabel: [],
   searchMarker: []
 }
 
-// 点击区域的信息
-const activeDistrictName = ref('')
-const activeStreetName = ref('')
+// 当前选中的区名。
+const activeItemName = ref('')
+// 当前选中的街道名。
 
-// 地图实例 
+// 百度地图相关运行时实例。
 let BMapGLRef: any = null
 let mapvglRef: any = null
 let map: any = null
 let mapvglView: any = null
 let heatmapLayer: any = null
+// 边界重绘的版本号，避免异步结果回写旧状态。
 let boundaryViewToken = 0
 
-// 监听 mode，切换图层
+// 切换显示模式时同步刷新当前图层。
 watch(mode, () => {
   if (!isMapReady.value) {
     return
@@ -358,7 +317,23 @@ onMounted(async () => {
 
   try {
     await withLocationLoading(async () => {
-      await loadInitialPointItems()
+      const visibleStreetItems = await loadPointItems({
+        boundaries: rootBoundaryList,
+        focusZoom: DEFAULT_STREET_FOCUS_ZOOM,
+        buildKeyword: (name) => buildTownKeyword(ROOT_DISTRICT_NAME, name)
+      })
+      const rootCenter = await fetchLocation(buildDistrictKeyword(ROOT_DISTRICT_NAME)).catch(
+        () => CITY_VIEW.center
+      )
+      const rootZoom = DEFAULT_DISTRICT_FOCUS_ZOOM
+
+      cityView.value = {
+        center: rootCenter,
+        zoom: rootZoom
+      }
+      rootLabelItems.value = visibleStreetItems
+      currentLabelItems.value = visibleStreetItems
+      currentBoundaryFeatures.value = rootBoundaryList
     })
 
     //等待百度地图相关全局对象就绪
@@ -391,7 +366,7 @@ onUnmounted(() => {
   isMapReady.value = false
 })
 
-// 轮询检查 `BMapGL`、`mapvgl`、`mapv` 这几个全局对象是否就绪。
+// 轮询检查百度地图和 mapvgl 全局对象是否已经加载完成。
 const waitForMapGlobals = (timeout = 15000) => {
   return new Promise<{ BMapGL: any; mapvgl: any }>((resolve, reject) => {
     const startedAt = Date.now()
@@ -419,11 +394,7 @@ const waitForMapGlobals = (timeout = 15000) => {
   })
 }
 
-// 地图底图创建。
-// 1. `centerAndZoom`：设置初始中心点和缩放级别
-// 2. `enableScrollWheelZoom(true)`：允许鼠标滚轮缩放
-// 3. `setDisplayOptions`：隐藏默认 POI，减少底图噪音
-// 4. `setTilt(0)` / `setHeading(0)`：固定成正北朝上、无倾斜的 2D 视角
+// 创建百度地图底图实例并设置基础交互。
 const initMap = () => {
   if (!mapContainer.value || !BMapGLRef) {
     return
@@ -445,7 +416,7 @@ const initMap = () => {
   map.setHeading?.(0)
 }
 
-// `mapvgl` 挂载热力图
+// 确保 mapvgl 的 View 已经绑定到底图。
 const ensureMapvglView = () => {
   return new Promise<void>((resolve) => {
     if (mapvglView || !map || !mapvglRef) {
@@ -481,98 +452,37 @@ const ensureMapvglView = () => {
   })
 }
 
-// `Boundary` 可以根据行政区名字返回边界路径。
-// 例如：
-// 1. `北京市`
-// 2. `北京市朝阳区`
-//
-// 返回的 `boundaries` 本质上是一组路径字符串，
-// 后面要再喂给 `new BMapGL.Polygon(...)` 才能真正画出来。
-const getBoundaryPaths = (keyword: string) => {
-  return new Promise<string[]>((resolve) => {
-    if (!BMapGLRef?.Boundary) {
-      resolve([])
-      return
-    }
-
-    const boundary = new BMapGLRef.Boundary()
-    boundary.get(keyword, (result: { boundaries?: string[] }) => {
-   
-      
-      resolve(result.boundaries ?? [])
-    })
-  })
-}
-
+// 根据当前层级的数据源，整批重绘地图边界。
 const refreshBoundaryView = async () => {
   const token = ++boundaryViewToken
-  const rootNode = currentDataList.value
-
-  if (!activeDistrictName.value) {
-    const [rootPaths, boundaryGroups] = await Promise.all([
-      getBoundaryPaths(rootNode.name),
-      Promise.all(districtPointItems.value.map((district) => getBoundaryPaths(buildDistrictKeyword(rootNode, district.name))))
-    ])
-
-    if (token !== boundaryViewToken) {
-      return
-    }
-
-    clearOverlayGroup('cityBoundary')
-    clearOverlayGroup('districtBoundary')
-
-    overlayGroups.cityBoundary = rootPaths.map((path: string) =>
-      createPolygon(path, {
-        strokeColor: '#a88d8a',
-        strokeWeight: 5,
-        strokeOpacity: 0.96,
-        fillColor: '#ccffe8',
-        fillOpacity: 0.48,
-        enableClicking: false
-      })
-    )
-
-    overlayGroups.districtBoundary = boundaryGroups.reduce<any[]>((allPolygons, paths) => {
-      paths.forEach((path) => {
-        allPolygons.push(
-          createPolygon(path, {
-            strokeColor: '#756a7e',
-            strokeWeight: 1.2,
-            strokeOpacity: 0.7,
-            fillOpacity: 0,
-            enableClicking: false
-          })
-        )
-      })
-
-      return allPolygons
-    }, [])
-
-    return
-  }
-
-  const selectedDistrictPaths = await getBoundaryPaths(buildDistrictKeyword(rootNode, activeDistrictName.value))
+  const boundaryFeatures = currentBoundaryFeatures.value
 
   if (token !== boundaryViewToken) {
     return
   }
 
-  clearOverlayGroup('cityBoundary')
-  clearOverlayGroup('districtBoundary')
+  clearOverlayGroup('mapBoundary')
 
-  overlayGroups.cityBoundary = selectedDistrictPaths.map((path: string) =>
-    createPolygon(path, {
-      strokeColor: '#b84f5a',
-      strokeWeight: 4,
-      strokeOpacity: 0.96,
-      fillColor: '#ffd9d9',
-      fillOpacity: 0.42,
-      enableClicking: false
-    })
+  if (!boundaryFeatures.length) {
+    return
+  }
+
+  const polygonInputs = boundaryFeatures.reduce<PolygonInput[]>((allPolygons, feature) => {
+    allPolygons.push(...getPolygonInputsFromFeature(feature))
+    return allPolygons
+  }, [])
+
+  if (!polygonInputs.length) {
+    return
+  }
+
+  overlayGroups.mapBoundary = polygonInputs.map((polygonInput: PolygonInput) =>
+    createPolygon(polygonInput, DEFAULT_BOUNDARY_STYLE)
   )
 }
 
-const createPolygon = (path: string, options: Record<string, unknown>) => {
+// 创建一个多边形覆盖物并挂到地图上。
+const createPolygon = (path: string | any[], options: Record<string, unknown>) => {
   if (!map || !BMapGLRef) {
     return null
   }
@@ -584,6 +494,7 @@ const createPolygon = (path: string, options: Record<string, unknown>) => {
   return polygon
 }
 
+// 清理某一组覆盖物。
 const clearOverlayGroup = (name: OverlayGroup) => {
   if (!map) {
     overlayGroups[name] = []
@@ -599,18 +510,18 @@ const clearOverlayGroup = (name: OverlayGroup) => {
   overlayGroups[name] = []
 }
 
+// 清理当前页面所有地图图层和覆盖物。
 const clearAllMapLayers = () => {
-  clearOverlayGroup('cityBoundary')
-  clearOverlayGroup('districtBoundary')
+  clearOverlayGroup('mapBoundary')
   clearOverlayGroup('districtLabel')
   clearOverlayGroup('searchMarker')
   clearHeatmap()
 }
 
+// 清理热力图图层。
 const clearHeatmap = () => {
   if (mapvglView && heatmapLayer) {
     try {
-      // 先清数据，再移除图层，兼容性比直接删更稳。
       heatmapLayer.setData([])
       mapvglView.removeLayer(heatmapLayer)
     } catch { }
@@ -619,8 +530,8 @@ const clearHeatmap = () => {
   heatmapLayer = null
 }
 
+// 根据当前模式决定显示热力图还是标签图。
 const refreshVisibleLayers = () => {
-  // 这两个模式是互斥的，所以切换时一定要清掉另一种模式留下的内容。
   if (mode.value === 'heat') {
     clearOverlayGroup('districtLabel')
     renderHeatmap()
@@ -631,15 +542,8 @@ const refreshVisibleLayers = () => {
   renderDistrictLabels()
 }
 
-// 根据当前钻取层级返回应该展示在地图上的点位数据。
-const getCurrentPointItems = (): Array<DistrictItem | StreetItem> => {
-  if (!activeDistrictName.value) {
-    return districtPointItems.value
-  }
 
-  return streetPointItemsByDistrict.value[activeDistrictName.value] ?? []
-}
-
+// 渲染热力图图层。
 const renderHeatmap = () => {
   clearHeatmap()
 
@@ -647,21 +551,17 @@ const renderHeatmap = () => {
     return
   }
 
-
-
-  // 这里按官方文档使用 `geometry + properties.count` 的数据格式。
-  // 北京整市视角下用米做单位，热区半径更稳定。
   heatmapLayer = new mapvglRef.HeatmapLayer({
-    size: 3600,
-    max: 70,
+    size: 1000,
+    max: 100,
     min: 0,
     unit: 'm',
     height: 0,
     gradient: {
-      0.12: 'rgba(96, 92, 255, 0.58)',
-      0.34: 'rgba(54, 244, 93, 0.72)',
-      0.62: 'rgba(234, 241, 37, 0.86)',
-      1: 'rgba(231, 52, 39, 0.94)'
+      0.0: 'rgb(50, 50, 256)',
+      0.1: 'rgb(50, 250, 56)',
+      0.5: 'rgb(250, 250, 56)',
+      1.0: 'rgb(250, 50, 56)'
     }
   })
 
@@ -669,6 +569,7 @@ const renderHeatmap = () => {
   heatmapLayer.setData(HEAT_BASE_POINTS)
 }
 
+// 渲染当前层级的标签覆盖物。
 const renderDistrictLabels = () => {
   if (!map || !BMapGLRef) {
     return
@@ -676,7 +577,11 @@ const renderDistrictLabels = () => {
 
   clearOverlayGroup('districtLabel')
 
-  const pointItems = getCurrentPointItems()
+  if (mode.value !== 'point') {
+    return
+  }
+
+  const pointItems = currentLabelItems.value
 
   pointItems.forEach((item) => {
     // `Label` 是百度地图自带的文本覆盖物。
@@ -686,15 +591,10 @@ const renderDistrictLabels = () => {
       offset: new BMapGLRef.Size(-42, -18)
     })
 
-    applyDistrictLabelStyle(label, isPointItemActive(item))
+    applyDistrictLabelStyle(label)
 
     label.addEventListener('click', () => {
-      if ('focusZoom' in item) {
-        void focusDistrict(item)
-        return
-      }
-
-      focusStreet(item)
+      void focusItem(item)
     })
 
     map.addOverlay(label)
@@ -702,70 +602,49 @@ const renderDistrictLabels = () => {
   })
 }
 
-// 先切到区视角，再按需拉街道中心点，避免未点击的区提前做无效请求。
-const focusDistrict = async (district: DistrictItem) => {
-  activeDistrictName.value = district.name
-  activeStreetName.value = ''
-
+// 点击标签后的统一处理：
+// 点区：切到街道层 mock 数据
+// 点街道：切到单街道 mock 数据
+const focusItem = async (item: MapLabelItem) => {
   if (!map || !BMapGLRef) {
     return
   }
 
-  if (activeDistrictName.value !== district.name) {
+  if (activeItemName.value === item.name) {
     return
   }
 
-  map.centerAndZoom(new BMapGLRef.Point(...district.center), district.focusZoom)
-  void refreshBoundaryView()
-  await ensureTownPointItems(district.name)
+  activeItemName.value = item.name
+  const center = await fetchLocation(item.keyword).catch(() => item.center)
 
-  if (activeDistrictName.value !== district.name) {
+  if (mode.value !== 'point') {
     return
   }
 
+  const selectedStreetBoundary = selectedStreetBoundaryList[0]
+  currentBoundaryFeatures.value = selectedStreetBoundaryList
+  currentLabelItems.value = [
+    {
+      ...item,
+      value: selectedStreetBoundary?.privateEnterpriseCount ?? item.value
+    }
+  ]
+
+  map.centerAndZoom(new BMapGLRef.Point(...center), item.focusZoom)
+  await refreshBoundaryView()
   renderDistrictLabels()
 }
 
-const focusStreet = (street: StreetItem) => {
-  activeStreetName.value = street.name
-  refreshDistrictLabelStyles()
-}
-
-const refreshDistrictLabelStyles = () => {
-  const pointItems = getCurrentPointItems()
-
-  overlayGroups.districtLabel.forEach((label, index) => {
-    const pointItem = pointItems[index]
-
-    if (!label || !pointItem) {
-      return
-    }
-
-    applyDistrictLabelStyle(label, isPointItemActive(pointItem))
-  })
-}
-
-const isPointItemActive = (item: DistrictItem | StreetItem) => {
-  if ('focusZoom' in item) {
-    return item.name === activeDistrictName.value
-  }
-
-  return item.name === activeStreetName.value
-}
-
-const applyDistrictLabelStyle = (label: any, isActive: boolean) => {
+// 标签样式。
+const applyDistrictLabelStyle = (label: any) => {
   label.setStyle({
     minWidth: '84px',
     padding: '5px 12px',
     border: 'none',
     borderRadius: '999px',
     color: '#ffffff',
-    background: isActive
-      ? 'linear-gradient(180deg,#f54300 0%,#a0001a 100%)'
-      : 'linear-gradient(180deg,#ff6c77 0%,#f02736 100%)',
-    boxShadow: isActive
-      ? '0 8px 16px rgba(160, 0, 26, 0.28)'
-      : '0 8px 14px rgba(255, 61, 89, 0.22)',
+    background: 'linear-gradient(180deg,#ff6c77 0%,#f02736 100%)',
+    boxShadow: '0 8px 14px rgba(255, 61, 89, 0.22)',
     fontSize: '14px',
     lineHeight: '1.2',
     textAlign: 'center',
@@ -773,13 +652,11 @@ const applyDistrictLabelStyle = (label: any, isActive: boolean) => {
   })
 }
 
-const setMode = (nextMode: Mode) => {
-  mode.value = nextMode
-}
-
-const resetToCityView = () => {
-  activeDistrictName.value = ''
-  activeStreetName.value = ''
+// 切换页面显示模式。
+const restoreCityState = () => {
+  activeItemName.value = ''
+  currentBoundaryFeatures.value = rootBoundaryList
+  currentLabelItems.value = rootLabelItems.value
 
   if (!map || !BMapGLRef) {
     return
@@ -787,18 +664,39 @@ const resetToCityView = () => {
 
   map.centerAndZoom(new BMapGLRef.Point(...cityView.value.center), cityView.value.zoom)
   void refreshBoundaryView()
+}
+
+const setMode = (nextMode: Mode) => {
+  if (mode.value === nextMode) {
+    return
+  }
+
+  if (nextMode === 'heat') {
+    restoreCityState()
+    clearOverlayGroup('districtLabel')
+    clearOverlayGroup('searchMarker')
+  }
+
+  mode.value = nextMode
+}
+
+// 返回北京首页视图，并恢复首页边界与标签。
+const resetToCityView = () => {
+  restoreCityState()
   renderDistrictLabels()
 }
 
-// 百度地图实例自带缩放方法，这里只是给页面按钮包一层。
+// 地图放大按钮。
 const zoomIn = () => {
   map?.zoomIn?.()
 }
 
+// 地图缩小按钮。
 const zoomOut = () => {
   map?.zoomOut?.()
 }
 
+// 搜索回车后的演示定位逻辑。
 const handleSearchEnter = () => {
   if (!map || !BMapGLRef || !searchKeyword.value.trim()) {
     return
@@ -823,6 +721,7 @@ const handleSearchEnter = () => {
   overlayGroups.searchMarker.push(marker)
 }
 
+// 搜索定位点的 HTML 内容。
 const getSearchMarkerMarkup = () => {
   return `
     <div style="width:28px;height:36px;display:flex;align-items:flex-start;justify-content:center; position:relative;">
@@ -870,9 +769,9 @@ const getSearchMarkerMarkup = () => {
         </button>
       </div>
 
-      <div v-if="activeDistrictName" class="drill-bar">
-        <span>{{ activeDistrictName }}</span>
-        <button type="button" @click="resetToCityView">返回全市</button>
+      <div v-if="activeItemName" class="drill-bar">
+        <span>{{ activeItemName }}</span>
+        <button type="button" @click="resetToCityView">返回街道列表</button>
       </div>
 
       <div v-if="mode === 'heat'" class="heat-legend">
@@ -1134,8 +1033,7 @@ const getSearchMarkerMarkup = () => {
 //     left: 12px;
 //     bottom: 20px;
 //   }
-// }
-</style>
+// }</style>
 
 <style>
 .bubble {
