@@ -5,6 +5,8 @@ import heat from '@/assets/heat.png'
 import heatActive from '@/assets/heatActive.png'
 import point from '@/assets/point.png'
 import pointActive from '@/assets/pointActive.png'
+// beijing数据
+import beijingData from './beijing.json'
 // 全市各区边界
 import beijingBoundarySource from './beijingbj.json'
 // mock 的街道边界数据。
@@ -19,7 +21,8 @@ type BoundaryFeature = {
   relatedId: number
   // 坐标。
   coordinates: number[][][][]
-  level: string
+  // 级别
+  level: 'CITY' | 'COUNTY' | 'TOWN'
   // 企业数量。
   privateEnterpriseCount?: number
 }
@@ -42,6 +45,8 @@ const selectedStreetBoundaryList = (selectedStreetBoundarySource as BoundaryColl
 // 地理编码时统一使用的城市前缀。
 const CITY_NAME = '北京市'
 
+const options = ref(beijingData)
+
 // 1. heat 热力 ponint点位
 type Mode = 'heat' | 'point'
 
@@ -59,7 +64,6 @@ type MapLabelItem = {
   // 点击标签后聚焦的缩放级别。
   focusZoom: number
   // 区级标签时为空；街道标签时记录所属区，当前主要用于按区缓存街道列表。
-  districtName?: string
 }
 
 
@@ -88,11 +92,9 @@ type BMapWindow = Window &
     mapv?: any
   }
 
-// 地图默认中心点和缩放级别。
-const CITY_VIEW = {
-  center: [116.404, 39.915] as [number, number],
-  zoom: 10
-}
+
+// 默认缩放级别
+const DEFAULT_FOCUS_ZOOM = 10
 // 点击区后的默认缩放级别。
 const DEFAULT_DISTRICT_FOCUS_ZOOM = 13
 // 点击街道后的默认缩放级别。
@@ -106,6 +108,11 @@ const DEFAULT_BOUNDARY_STYLE = {
   fillOpacity: 0.48,
   enableClicking: false
 }
+// 地图默认中心点和缩放级别。
+const CITY_VIEW = ref({
+  center: [0,0] as [number, number],
+  zoom: DEFAULT_FOCUS_ZOOM
+})
 
 // 搜索按钮演示使用的固定点位。
 const SEARCH_MARKER_POINT = [116.1485, 39.7598] as [number, number]
@@ -115,8 +122,8 @@ const HEAT_SCALE = [0, 10000, 20000, 30000, 40000, 50000]
 
 // 当前地图视角。
 const cityView = ref({
-  center: [...CITY_VIEW.center] as [number, number],
-  zoom: CITY_VIEW.zoom
+  center: [...CITY_VIEW.value.center] as [number, number],
+  zoom: CITY_VIEW.value.zoom
 })
 // 北京首页的区级标签数据，重置视图时会回到这里。
 const rootLabelItems = ref<MapLabelItem[]>([])
@@ -208,16 +215,6 @@ const fetchLocation = async (keyword: string) => {
 }
 
 // loading 的异步函数。
-const withLocationLoading = async <T>(loader: () => Promise<T>) => {
-  isLocationLoading.value = true
-
-  try {
-    return await loader()
-  } finally {
-    isLocationLoading.value = false
-  }
-}
-
 // 把本地边界坐标转成百度地图 `Polygon` 可直接使用的数据。
 const getPolygonInputsFromFeature = (feature?: BoundaryFeature | null) => {
   if (!feature?.coordinates?.length || !BMapGLRef) {
@@ -239,14 +236,10 @@ const buildTownKeyword = (districtName: string, townName: string) => `${CITY_NAM
 // 用一份边界数据批量生成当前层级的标签数据。
 const loadPointItems = async ({
   boundaries,
-  focusZoom,
   buildKeyword,
-  districtName
 }: {
   boundaries: BoundaryFeature[]
-  focusZoom: number
   buildKeyword: (name: string) => string
-  districtName?: string
 }) => {
   const items = await Promise.all(
     boundaries.map(async (boundary) => {
@@ -257,9 +250,9 @@ const loadPointItems = async ({
           center: await fetchLocation(buildKeyword(boundary.name)),
           value: boundary.privateEnterpriseCount ?? 0,
           keyword: buildKeyword(boundary.name),
-          focusZoom,
-          districtName
+          focusZoom: boundary.level === 'CITY' ? DEFAULT_FOCUS_ZOOM:boundary.level === 'COUNTY' ? DEFAULT_DISTRICT_FOCUS_ZOOM : DEFAULT_STREET_FOCUS_ZOOM,
         }
+        
 
         return item
       } catch {
@@ -275,7 +268,7 @@ const loadPointItems = async ({
 const mapContainer = ref<HTMLDivElement | null>(null)
 
 // 搜索框输入内容。
-const searchKeyword = ref('')
+const searchKeyword = ref<number | undefined>()
 
 // 当前显示热力图还是点位图。
 const mode = ref<Mode>('point')
@@ -321,17 +314,23 @@ onMounted(async () => {
   }
 
   try {
-    await withLocationLoading(async () => {
+    isLocationLoading.value = true
+    try {
+      // 初始化标签数据
       const visibleDistrictItems = await loadPointItems({
         boundaries: districtBoundaryList,
-        focusZoom: DEFAULT_DISTRICT_FOCUS_ZOOM,
         buildKeyword: buildDistrictKeyword
       })
-      const rootCenter =
-        visibleDistrictItems.length === 1
-          ? visibleDistrictItems[0].center
-          : await fetchLocation(CITY_NAME).catch(() => CITY_VIEW.center)
-      const rootZoom = visibleDistrictItems.length === 1 ? DEFAULT_DISTRICT_FOCUS_ZOOM : CITY_VIEW.zoom
+      let name
+      if(beijingData.level === 'CITY') {
+        name = CITY_NAME
+      } else{
+        name = CITY_NAME + beijingData.name
+      }
+      // 初始化中心点
+      const rootCenter = await fetchLocation(name).catch(() => CITY_VIEW.value.center)
+      // 判断默认权限
+      const rootZoom = beijingData.level === 'CITY' ? DEFAULT_FOCUS_ZOOM : beijingData.level === 'COUNTY' ? DEFAULT_DISTRICT_FOCUS_ZOOM :DEFAULT_STREET_FOCUS_ZOOM
 
       cityView.value = {
         center: rootCenter,
@@ -340,7 +339,9 @@ onMounted(async () => {
       rootLabelItems.value = visibleDistrictItems
       currentLabelItems.value = visibleDistrictItems
       currentBoundaryFeatures.value = districtBoundaryList
-    })
+    } finally {
+      isLocationLoading.value = false
+    }
 
     //等待百度地图相关全局对象就绪
     const libs = await waitForMapGlobals()
@@ -412,7 +413,7 @@ const initMap = () => {
   map.centerAndZoom(new BMapGLRef.Point(...cityView.value.center), cityView.value.zoom)
   map.enableScrollWheelZoom(true)
   map.setMinZoom(8)
-  map.setMaxZoom(15)
+  // map.setMaxZoom(15)
   map.setDisplayOptions?.({
     indoor: false,
     poiText: true,
@@ -615,18 +616,24 @@ const focusItem = async (item: MapLabelItem) => {
   if (!map || !BMapGLRef) {
     return
   }
+  console.log(item);
+  
 
   if (!activeDistrictName.value) {
     activeDistrictName.value = item.name
 
-    const nextItems = await withLocationLoading(() =>
-      loadPointItems({
+    isLocationLoading.value = true
+
+    let nextItems: MapLabelItem[]
+    try {
+      //模拟点击东城区
+      nextItems = await loadPointItems({
         boundaries: streetBoundaryList,
-        focusZoom: DEFAULT_STREET_FOCUS_ZOOM,
-        buildKeyword: (name) => buildTownKeyword(item.name, name),
-        districtName: item.name
+        buildKeyword: (name) => buildTownKeyword(item.name, name)
       })
-    )
+    } finally {
+      isLocationLoading.value = false
+    }
 
     if (mode.value !== 'point') {
       return
@@ -724,7 +731,7 @@ const zoomOut = () => {
 
 // 搜索回车后的演示定位逻辑。
 const handleSearchEnter = () => {
-  if (!map || !BMapGLRef || !searchKeyword.value.trim()) {
+  if (!map || !BMapGLRef || searchKeyword.value == null) {
     return
   }
 
@@ -776,12 +783,24 @@ const getSearchMarkerMarkup = () => {
 
 
       <div class="search-bar">
-        <a-input v-model:value="searchKeyword" placeholder="请输入区/乡镇（街道）" @pressEnter="handleSearchEnter">
+        <!-- <a-input v-model:value="searchKeyword" placeholder="请输入区/乡镇（街道）" @pressEnter="handleSearchEnter">
           <template #suffix>
             <img :src="search" alt="">
           </template>
-        </a-input>
-
+        </a-input> -->
+        <a-tree-select
+          v-model:value="searchKeyword"
+          :tree-data="[options]"
+          :listHeight="650"
+          :fieldNames="{
+            children:'children', label:'name', value: 'idCode'
+          }"
+          placeholder="请输入区/乡镇（街道）"
+          style="width: 100%">
+          <template #suffixIcon>
+            <img :src="search" alt="">
+          </template>
+        </a-tree-select>
       </div>
 
       <div class="mode-toggle">
@@ -878,21 +897,48 @@ const getSearchMarkerMarkup = () => {
   background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 2px 8px rgba(91, 108, 102, 0.08);
 
-  input {
-    flex: 1;
-    padding: 0 20px;
-    border: 0;
-    outline: none;
-    background: transparent;
-    color: #2f3d39;
-    font-size: 16px;
-
-    &::placeholder {
-      color: #c7c1c0;
-    }
+  :deep(.ant-select) {
+    width: 100%;
+    height: 100%;
   }
 
-  img {
+  :deep(.ant-select-selector) {
+    height: 100% !important;
+    padding: 0 20px !important;
+    border: 0 !important;
+    outline: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: #2f3d39;
+    font-size: 16px;
+  }
+
+  :deep(.ant-select-selection-search) {
+    inset-inline-start: 20px !important;
+    inset-inline-end: 52px !important;
+  }
+
+  :deep(.ant-select-selection-search-input),
+  :deep(.ant-select-selection-item),
+  :deep(.ant-select-selection-placeholder) {
+    height: 48px !important;
+    line-height: 48px !important;
+    font-size: 16px;
+  }
+
+  :deep(.ant-select-selection-placeholder) {
+    color: #c7c1c0;
+  }
+
+  :deep(.ant-select-arrow) {
+    right: 20px;
+    inset-inline-end: 20px;
+    width: 24px;
+    height: 24px;
+    margin-top: -12px;
+  }
+
+  :deep(img) {
     width: 24px;
     height: 24px;
   }

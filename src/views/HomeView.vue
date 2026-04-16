@@ -179,17 +179,6 @@ const fetchLocation = async (keyword: string) => {
   return [data.result.location.lng, data.result.location.lat] as [number, number]
 }
 
-// 统一管理中心点获取时的 loading，兼容初始化和区级钻取两种场景。
-const withLocationLoading = async <T>(loader: () => Promise<T>) => {
-  isLocationLoading.value = true
-
-  try {
-    return await loader()
-  } finally {
-    isLocationLoading.value = false
-  }
-}
-
 const getAreaValue = (node: AreaNode) => Number(node.value ?? 0)
 
 // 对 `fetchLocation` 再包一层缓存，避免相同区域名重复调用地理编码接口。
@@ -276,8 +265,11 @@ const ensureTownPointItems = async (districtName: string) => {
   }
 
   const townNodes = getTownNodes(districtNode)
-  const townItems = await withLocationLoading(async () => {
-    return Promise.all(
+  isLocationLoading.value = true
+
+  let townItems: Array<StreetItem | null>
+  try {
+    townItems = await Promise.all(
       townNodes.map(async (node) => {
         try {
           const streetItem: StreetItem = {
@@ -295,7 +287,9 @@ const ensureTownPointItems = async (districtName: string) => {
         }
       })
     )
-  })
+  } finally {
+    isLocationLoading.value = false
+  }
 
   const nextItems = townItems.filter((item): item is StreetItem => item !== null)
   streetPointItemsByDistrict.value = {
@@ -357,9 +351,12 @@ onMounted(async () => {
   }
 
   try {
-    await withLocationLoading(async () => {
+    isLocationLoading.value = true
+    try {
       await loadInitialPointItems()
-    })
+    } finally {
+      isLocationLoading.value = false
+    }
 
     //等待百度地图相关全局对象就绪
     const libs = await waitForMapGlobals()

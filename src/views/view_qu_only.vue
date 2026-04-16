@@ -206,16 +206,6 @@ const fetchLocation = async (keyword: string) => {
 }
 
 // loading 的异步函数。
-const withLocationLoading = async <T>(loader: () => Promise<T>) => {
-  isLocationLoading.value = true
-
-  try {
-    return await loader()
-  } finally {
-    isLocationLoading.value = false
-  }
-}
-
 // 把本地边界坐标转成百度地图 `Polygon` 可直接使用的数据。
 const getPolygonInputsFromFeature = (feature?: BoundaryFeature | null) => {
   if (!feature?.coordinates?.length || !BMapGLRef) {
@@ -316,7 +306,8 @@ onMounted(async () => {
   }
 
   try {
-    await withLocationLoading(async () => {
+    isLocationLoading.value = true
+    try {
       const visibleStreetItems = await loadPointItems({
         boundaries: rootBoundaryList,
         focusZoom: DEFAULT_STREET_FOCUS_ZOOM,
@@ -334,7 +325,9 @@ onMounted(async () => {
       rootLabelItems.value = visibleStreetItems
       currentLabelItems.value = visibleStreetItems
       currentBoundaryFeatures.value = rootBoundaryList
-    })
+    } finally {
+      isLocationLoading.value = false
+    }
 
     //等待百度地图相关全局对象就绪
     const libs = await waitForMapGlobals()

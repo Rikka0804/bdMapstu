@@ -217,7 +217,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 3221
     },
     {
@@ -397,7 +397,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 2970
     },
     {
@@ -1201,7 +1201,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 16917
     },
     {
@@ -1873,7 +1873,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 15285
     },
     {
@@ -2629,7 +2629,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 6148
     },
     {
@@ -2909,7 +2909,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 1625
     },
     {
@@ -4077,7 +4077,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 382
     },
     {
@@ -5629,7 +5629,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 1088
     },
     {
@@ -6857,7 +6857,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 2158
     },
     {
@@ -7997,7 +7997,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 2170
     },
     {
@@ -9313,7 +9313,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 2775
     },
     {
@@ -26983,7 +26983,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 1939
     },
     {
@@ -27975,7 +27975,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 320
     },
     {
@@ -30091,7 +30091,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 536
     },
     {
@@ -31803,7 +31803,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 640
     },
     {
@@ -33391,7 +33391,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 242
     },
     {
@@ -34703,7 +34703,7 @@
           ]
         ]
       ],
-      "level": "county",
+      "level": "COUNTY",
       "privateEnterpriseCount": 2888
     }
   ]
